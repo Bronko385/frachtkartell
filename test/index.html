@@ -237,15 +237,9 @@ const START = {"ort": "der Altstadt", "kamera": [-260, 300], "lager": [-310, 358
    Entscheidet vor dem Spielstart: „online“ (Server-Wirtschaft in dieser Welt an) oder „demo“ (Zeitraffer wie 0.4). */
 window.FKNETZ=(function(){
 const KONF=window.FK; // eigene Kopie: demo.js überschreibt window.FK später mit dem Kamera-Haken
-const URL0=KONF.supabaseUrl, KEY=KONF.supabaseKey, WELT=KONF.welt;
-// Eine Anmeldung für alle Welten: Konten gelten im ganzen Supabase-Projekt, die Welten trennt welt_id.
-// Live (/frachtkartell/) und Testversion (/frachtkartell/test/) liegen unter derselben Adresse und teilen sie sich.
-const SP='frachtkartell-sitzung', ALT=[SP+'-'+WELT,SP+'-live',SP+'-test']; // ALT: Schlüssel bis 0.5.1
-let sitzung=null;try{for(const k of [SP,...ALT]){sitzung=JSON.parse(localStorage.getItem(k)||'null');if(sitzung)break;}}catch(e){}
-const merken=s=>{sitzung=s;try{s?localStorage.setItem(SP,JSON.stringify(s)):localStorage.removeItem(SP);ALT.forEach(k=>localStorage.removeItem(k));}catch(e){}};
-if(sitzung)merken(sitzung);
-// Andere Seite (Live oder Test) hat die Sitzung erneuert: übernehmen, sonst gilt hier ein verbrauchter Erneuerungs-Schlüssel
-addEventListener('storage',e=>{if(e.key===SP){try{sitzung=JSON.parse(e.newValue||'null');}catch(x){}}});
+const URL0=KONF.supabaseUrl, KEY=KONF.supabaseKey, WELT=KONF.welt, SP='frachtkartell-sitzung-'+WELT;
+let sitzung=null;try{sitzung=JSON.parse(localStorage.getItem(SP)||'null');}catch(e){}
+const merken=s=>{sitzung=s;try{s?localStorage.setItem(SP,JSON.stringify(s)):localStorage.removeItem(SP);}catch(e){}};
 async function anfrage(pfad,{method='GET',body,token,ms=12000}={}){
   const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),ms);
   try{const r=await fetch(URL0+pfad,{method,signal:ctl.signal,headers:Object.assign({apikey:KEY,'Content-Type':'application/json'},token?{Authorization:'Bearer '+token}:{}),body:body?JSON.stringify(body):undefined});
@@ -259,7 +253,7 @@ function sitzungAus(d,email){return{access_token:d.access_token,refresh_token:d.
 (function(){const h=new URLSearchParams(location.hash.slice(1));if(!h.get('access_token'))return;
   merken(sitzungAus({access_token:h.get('access_token'),refresh_token:h.get('refresh_token'),expires_in:h.get('expires_in')}));
   try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}})();
-async function token(){try{const f=JSON.parse(localStorage.getItem(SP)||'null');if(f)sitzung=f;}catch(e){}if(!sitzung)return null;
+async function token(){if(!sitzung)return null;
   if(Date.now()>sitzung.ablauf-60000){try{const d=await anfrage('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:sitzung.refresh_token}});merken(sitzungAus(d,sitzung.email));}
     catch(e){if(e.netz)throw e;merken(null);return null;}}
   return sitzung.access_token;}
@@ -283,6 +277,9 @@ const N={welt:null,online:false,
     let u;try{u=new URL(/^https?:/i.test(roh)?roh:'https://'+roh);}catch(e){throw new Error('Das ist kein Link aus der Mail.');}
     const th=u.searchParams.get('token')||u.searchParams.get('token_hash');if(!th)throw new Error('In diesem Link steckt kein Anmelde-Schlüssel.');
     const d=await anfrage('/auth/v1/verify',{method:'POST',body:{type:u.searchParams.get('type')==='signup'?'signup':'magiclink',token_hash:th}});merken(sitzungAus(d,email));},
+  // Testwelt: ohne E-Mail als Gast spielen (Supabase „Anonymous sign-ins“). Klappt das nicht, kommt die normale Anmeldung.
+  testwelt:WELT==='test',
+  async gast(){const d=await anfrage('/auth/v1/signup',{method:'POST',body:{}});merken(sitzungAus(d,'Testspieler'));},
   async anmelden(email,code){const d=await anfrage('/auth/v1/verify',{method:'POST',body:{type:'email',email,token:code}});merken(sitzungAus(d,email));},
   async abmelden(){try{const t=await token();if(t)await anfrage('/auth/v1/logout',{method:'POST',token:t,ms:5000});}catch(e){}merken(null);},
   vergessen(){merken(null);},
@@ -901,7 +898,7 @@ const minuten=ms=>{const m=Math.max(1,Math.ceil(ms/60000));return m<60?m+' min':
 const satz=t=>/\.$/.test(t)?t:t+'.';
 
 /* ---------- Kleine Helfer ---------- */
-function fehler(e){if(e&&e.abgemeldet){zeigeAnmelden();return;}G.toast('','!',e&&e.netz?'Keine Verbindung':'Das ging nicht',(e&&e.message)||'');}
+function fehler(e){if(e&&e.abgemeldet){anmeldenOderGast();return;}G.toast('','!',e&&e.netz?'Keine Verbindung':'Das ging nicht',(e&&e.message)||'');}
 async function rpc(fn,args,knopf){if(knopf){knopf.disabled=true;}
   try{const d=await N.rpc(fn,args);anwenden(d);return d;}catch(e){fehler(e);return null;}finally{if(knopf)knopf.disabled=false;}}
 function voll(html){schliesseVoll();const el=document.createElement('div');el.className='voll';el.id='voll';el.innerHTML=html;document.body.appendChild(el);return el;}
@@ -1140,11 +1137,14 @@ X.build=(k,b)=>{if(!b)return;const p=ll(b.cx,b.cz);
 /* ---------- Laden vom Server ---------- */
 async function laden(erst){if(ladenLaeuft)return;ladenLaeuft=true;naechstesLaden=Date.now()+60000;
   try{const d=await N.rpc('fk_stand');const warLeer=!st;anwenden(d);if((erst||warLeer)&&d.bande){zeigeBericht();}}
-  catch(e){if(e.abgemeldet)zeigeAnmelden();else if(erst||!st)zeigeOffline(e.message);}
+  catch(e){if(e.abgemeldet)setTimeout(anmeldenOderGast);else if(erst||!st)zeigeOffline(e.message);}
   finally{ladenLaeuft=false;}}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&N.angemeldet)laden(false);});
 
-if(N.veraltet())zeigeVeraltet();else if(!N.angemeldet)zeigeAnmelden();else laden(true);
+// Testversion: ohne Anmeldung direkt als Gast hinein (eigenes Gastkonto je Gerät, bleibt gespeichert)
+let gastVersucht=false;
+async function anmeldenOderGast(){if(N.testwelt&&!gastVersucht){gastVersucht=true;try{await N.gast();await laden(true);return;}catch(e){}}zeigeAnmelden();}
+if(N.veraltet())zeigeVeraltet();else if(!N.angemeldet)anmeldenOderGast();else laden(true);
 window.__online={get st(){return st;},laden,helden,wagen};
 };
 </script>
