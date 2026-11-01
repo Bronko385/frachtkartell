@@ -1,0 +1,16 @@
+# Einmalig (Swens Ja, 01.11.): hängende Pages-Bereitstellung von 0.5.1 abbrechen. Wird danach wieder gelöscht.
+name: Pages entsperren
+on: workflow_dispatch
+permissions:
+  pages: write
+  contents: read
+jobs:
+  abbrechen:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=cb4a8095ce157ba787464cef0c24e6c3c41d893c
+          gh api "repos/${{ github.repository }}/pages/deployments/$id" || true
+          gh api -X POST "repos/${{ github.repository }}/pages/deployments/$id/cancel" && echo "abgebrochen" || echo "nicht abbrechbar"
